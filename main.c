@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <linux/fs.h>
 #include <e2p/e2p.h>
+#include <errno.h>
 
 
 #define GMUX_PORT_SWITCH_DISPLAY                0x10
@@ -80,6 +81,7 @@ uint8_t gpu_get_state(enum gpu_type t) {
 int gpu_switch_to(enum gpu_type t) {
         size_t i;
         const char *efi_file_path = "/sys/firmware/efi/efivars/gpu-power-prefs-fa4ce28d-b62f-4c99-9cc3-6815686e30f9";
+        // const char *efi_file_path = "/sys/firmware/efi/efivars/gpu-active-fa4ce28d-b62f-4c99-9cc3-6815686e30f9";
         FILE *fp = NULL;
 
         struct stat st;
@@ -105,14 +107,24 @@ int gpu_switch_to(enum gpu_type t) {
         /* this does: */
 
         /* the following clears the write protection flag on the file */
-        if (lstat(efi_file_path, &st) == -1) return ERR_CANT_STAT;
-        if (!S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISDIR(st.st_mode)) return ERR_NO_REG_FILE;
-        if (fgetflags(efi_file_path, &fsflags) == -1) {
-                perror("failed to get flags of file");
-                return ERR_CANT_GET_FLAGS;
-        }
-        fsflags &= ~EXT2_IMMUTABLE_FL;
-        if (fsetflags(efi_file_path, fsflags) == -1) return ERR_CANT_SET_FLAGS;
+	errno = 0;
+        if (lstat(efi_file_path, &st) == -1) {
+		if (errno == ENOENT) {
+			fp = fopen(efi_file_path, "wb");	
+		} else {
+			perror("Failed to stat");
+			return ERR_CANT_STAT;
+		}
+	}
+	if (fp == NULL) {
+		if (!S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISDIR(st.st_mode)) return ERR_NO_REG_FILE;
+		if (fgetflags(efi_file_path, &fsflags) == -1) {
+			perror("Failed to get flags of file");
+			return ERR_CANT_GET_FLAGS;
+		}
+		fsflags &= ~EXT2_IMMUTABLE_FL;
+		if (fsetflags(efi_file_path, fsflags) == -1) return ERR_CANT_SET_FLAGS;
+	}
 
         /* now write the magic byte sequence into the file, 1 for integrated, 0 for discrete */
         if (t == TYPE_INTEGRATED)
@@ -124,8 +136,9 @@ int gpu_switch_to(enum gpu_type t) {
                 return ERR_NO_GPU_SELECTED;
         }
                 
-
-        fp = fopen(efi_file_path, "wb+");
+	if (fp == NULL) {
+		fp = fopen(efi_file_path, "wb+");
+	}
         if (fp == NULL) {
                 perror("Couldn't open file");
                 return ERR_NO_FILE_PERMISSION;
